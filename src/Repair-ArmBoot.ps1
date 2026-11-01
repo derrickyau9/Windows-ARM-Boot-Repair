@@ -230,16 +230,26 @@ function Test-WindowsInstallation([string]$Root) {
  }
  return $true
 }
+function Get-EfiBackupRelativePath([string]$NormalizedEfiRoot,[string]$FileFullName) {
+ $prefix=[IO.Path]::GetFullPath($NormalizedEfiRoot).TrimEnd([char]'\')+'\'
+ $full=[IO.Path]::GetFullPath($FileFullName)
+ if(!$full.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase) -or $full.Length -le $prefix.Length){throw 'EFI backup file escaped its normalized source directory'}
+ return ('EFI\'+$full.Substring($prefix.Length))
+}
 function Backup-Efi([string]$Esp,[string]$Destination) {
  New-Item -ItemType Directory -Path $Destination -Force | Out-Null
  $entries=@()
  if(Test-Path -LiteralPath ($Esp+'EFI')){
   Assert-NoReparsePath ($Esp+'EFI')
-  $all=@(Get-ChildItem -LiteralPath ($Esp+'EFI') -Recurse -Force)
+  # FileInfo.FullName may expand 8.3 aliases; use the same normalized root for traversal and relative paths.
+  $efiDirectory=Get-Item -LiteralPath ($Esp+'EFI') -Force
+  if(!$efiDirectory.PSIsContainer){throw 'EFI source is not a directory'}
+  $efiRoot=$efiDirectory.FullName.TrimEnd([char]'\')
+  $all=@(Get-ChildItem -LiteralPath $efiRoot -Recurse -Force)
   if(@($all | Where-Object {$_.Attributes -band [IO.FileAttributes]::ReparsePoint}).Count){throw 'EFI tree contains a reparse point'}
-  Copy-Item -LiteralPath ($Esp+'EFI') -Destination (Join-Path $Destination 'EFI') -Recurse -Force
+  Copy-Item -LiteralPath $efiRoot -Destination (Join-Path $Destination 'EFI') -Recurse -Force
   foreach($file in @($all | Where-Object {!$_.PSIsContainer})){
-   $relative=$file.FullName.Substring($Esp.Length)
+   $relative=Get-EfiBackupRelativePath $efiRoot $file.FullName
    $hash=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
    if((Get-FileHash -LiteralPath (Join-Path $Destination $relative) -Algorithm SHA256).Hash -ne $hash){throw ('EFI backup mismatch: '+$relative)}
    $entries+=[pscustomobject]@{Path=$relative;SHA256=$hash}

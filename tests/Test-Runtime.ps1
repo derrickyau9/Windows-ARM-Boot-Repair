@@ -72,6 +72,37 @@ $manifest=@(Import-Csv -LiteralPath (Join-Path $backup 'EFI-files-before.csv'))
 Assert ($manifest.Count -eq 2) 'EFI backup inventories every file'
 foreach($row in $manifest){Assert ((Get-FileHash -LiteralPath (Join-Path $backup $row.Path)).Hash -eq $row.SHA256) 'EFI backup verified by independent hash'}
 
+# Regression: an input path can use an 8.3 alias while FileInfo.FullName uses the long spelling.
+$longEfi='C:\Users\Runner Administrator\AppData\Local\Temp\Fixture\source\EFI'
+Assert ((Get-EfiBackupRelativePath $longEfi ($longEfi+'\Boot\bootaa64.efi')) -eq 'EFI\Boot\bootaa64.efi') 'Relative backup path derives from normalized EFI root, not short input prefix length'
+Assert ((Get-EfiBackupRelativePath ($longEfi+'\') ($longEfi.ToLowerInvariant()+'\Microsoft\Boot\BCD')) -eq 'EFI\Microsoft\Boot\BCD') 'Relative backup path accepts Windows case and trailing separator'
+Reject {Get-EfiBackupRelativePath $longEfi ($longEfi+'-other\Boot\bootaa64.efi')} 'Normalized source comparison enforces a directory boundary'
+Reject {Get-EfiBackupRelativePath $longEfi ($longEfi+'\..\outside.efi')} 'Relative backup path rejects traversal outside EFI'
+Reject {Get-EfiBackupRelativePath $longEfi $longEfi} 'EFI root itself is not a backup file'
+& {
+ # Only alias resolution is simulated; directory traversal, copy and SHA256 verification are real.
+ $aliasRoot='C:\SYNTH~1\'
+ $aliasEfi=$aliasRoot+'EFI'
+ $realEfi=Microsoft.PowerShell.Management\Get-Item -LiteralPath ($source+'EFI') -Force
+ $aliasBackup=Join-Path $fixture 'alias-backup'
+ function Test-Path {
+  param([string]$Path,[string]$LiteralPath,[string]$PathType)
+  $value=$Path;if($LiteralPath){$value=$LiteralPath}
+  if($value -eq $aliasEfi){return $true}
+  return Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
+ }
+ function Get-Item {
+  param([string]$LiteralPath,[switch]$Force)
+  if($LiteralPath -eq $aliasEfi){return $realEfi}
+  return Microsoft.PowerShell.Management\Get-Item @PSBoundParameters
+ }
+ Backup-Efi $aliasRoot $aliasBackup
+ $rows=@(Import-Csv -LiteralPath (Join-Path $aliasBackup 'EFI-files-before.csv'))
+ Assert ($rows.Count -eq 2) 'Real backup succeeds after alias resolves to a differently sized long source prefix'
+ Assert (@($rows | Where-Object {$_.Path -eq 'EFI\Boot\bootaa64.efi'}).Count -eq 1) 'Alias regression manifest retains exact relative ARM fallback path'
+ Assert (@($rows | Where-Object {$_.Path -eq 'EFI\Microsoft\Boot\BCD'}).Count -eq 1) 'Alias regression manifest retains exact relative BCD path'
+ foreach($row in $rows){Assert ((Get-FileHash -LiteralPath (Join-Path $aliasBackup $row.Path)).Hash -eq $row.SHA256) 'Alias regression copied content verifies independently'}
+}
 # Inspect the real boot-file command plan through a mock native boundary; no EFI files are written.
 & {
  $state=@{Commands=@();Copies=0}
