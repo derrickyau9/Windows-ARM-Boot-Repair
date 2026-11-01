@@ -1,0 +1,31 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-tests:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build and run mock tests (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/Build.ps1
+      - name: Create portable package
+        shell: powershell
+        run: ./tools/New-Package.ps1 -SkipBuild
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Windows-ARM-Boot-Repair
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
